@@ -11,12 +11,20 @@
 #include <linux/ctype.h>
 #include <linux/pagemap.h>
 
+#include <linux/poll.h>
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)
 #include <linux/slab.h>
+#endif
+
 #include "simple.h"
 
 struct simple_dev *simple_device;
-static unsigned char simple_inc = 0;
+static unsigned char simple_inc = 0; // control flag
+static unsigned char simple_flag = 0;
 static unsigned char demobuffer[256];
+
+wait_queue_head_t read_queue;
 
 static void __exit simple_cleanup_module(void);
 
@@ -41,19 +49,41 @@ int simple_release(struct inode *inode, struct file *filp)
 
 ssize_t simple_read(struct file *filp, char __user *buf, size_t count,loff_t *f_pos)
 {
+	printk("wait event interrupt before\n");
+	wait_event_interruptible(read_queue, simple_flag);
+	printk("wait event interrupt afer\n");
 	if (copy_to_user(buf, demobuffer, count))
 	   count=-EFAULT;
-
+	printk("read data : %s\n", demobuffer);
 	return count;
 }
 
 ssize_t simple_write(struct file *filp, const char __user *buf, size_t count,loff_t *f_pos)
 {
+
+	printk("simple write\n");
+	memset(demobuffer, 0, 256);
 	if (copy_from_user(demobuffer+*f_pos, buf, count))
 	{
 		count = -EFAULT;
 	}
+	printk("write data : %s\n", demobuffer);
+
+    simple_flag = 1;
+    wake_up(&read_queue);
+
+out:
 	return count;
+}
+
+unsigned int simple_poll(struct file *file, poll_table *pt)
+{
+	unsigned int mask = POLLIN | POLLRDNORM;
+
+	printk("poll wait before\n");
+	poll_wait(file, &read_queue, pt); /*put current process into the wait queue*/
+	printk("poll wait after\n");
+	return mask;
 }
 
 struct file_operations simple_fops =
@@ -63,6 +93,7 @@ struct file_operations simple_fops =
 	.write =    simple_write,
 	.open =     simple_open,
 	.release =  simple_release,
+	.poll = 	simple_poll,
 };
 
 
@@ -75,7 +106,7 @@ static int __init simple_setup_module(void)
 	dev_t dev = 0;
 
 	dev = MKDEV(SIMPLE_MAJOR, SIMPLE_MINOR);
-	result = register_chrdev_region(dev, 1, "DEMO");
+	result = register_chrdev_region(dev, 1, "DEMO"); // major and minor to confirm one device
 	if (result < 0) {
 		printk(KERN_WARNING "DEMO: can't get major %d\n", SIMPLE_MAJOR);
 		return result;
@@ -88,8 +119,8 @@ static int __init simple_setup_module(void)
 		goto fail;
 	}
 	memset(simple_device, 0, sizeof(struct simple_dev));
-	cdev_init(&simple_device->cdev, &simple_fops);
 
+	cdev_init(&simple_device->cdev, &simple_fops);
 	simple_device->cdev.owner = THIS_MODULE;
 	simple_device->cdev.ops = &simple_fops;
 
@@ -99,6 +130,8 @@ static int __init simple_setup_module(void)
 		printk(KERN_NOTICE "Error %d adding DEMO\n", result);
 		goto fail;
 	}
+
+	init_waitqueue_head(&read_queue);
 	return 0;
 
 fail:

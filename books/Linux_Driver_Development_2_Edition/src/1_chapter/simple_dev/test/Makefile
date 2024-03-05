@@ -6,7 +6,7 @@ all:$(target)
 
 
 test : test.o
-	$(CC) $^ -o $@ $(LDFLAGS)
+	$(CC) $^ -o $@ $(LDFLAGS) -lpthread
 	@echo "测试使用register_chrdev注册的字符设备..."
 
 %.o : %.c
